@@ -240,7 +240,7 @@ con R2MusicPacker (y usa osu_a_r2beat.exe);
 Ya esta registrado en opencode (config global ~/.config/opencode),
 pero si quieres probarlo a mano:
 
-  C:\Users\Hysteria\OneDrive\Desktop\mcp r2beat\.venv\Scripts\python.exe server.py
+  C:\Users\User\OneDrive\Desktop\mcp r2beat\.venv\Scripts\python.exe server.py
 
 Se queda esperando mensajes MCP por stdio (no debe usarse como script normal).
 Para comprobar que responde, se puede lanzar el test:
@@ -259,5 +259,5 @@ RUTAS DE REFERENCIA (tus herramientas R2Beat)
 - r2noter\R2Test\rnr_music         -> carpeta de salida (charts + mp3)
 - r2noter\R2Test\rnr_script\music.txt -> lista de canciones del juego
 - Referencia de formato: repo clonado en
-  C:\Users\Hysteria\AppData\Local\Temp\opencode\dzsfo-r2beat
+  C:\Users\user\AppData\Local\Temp\opencode\dzsfo-r2beat
 =====================================================================
