@@ -1,0 +1,263 @@
+=====================================================================
+R2BEAT MCP SERVER - GUIA DE USO Y FUNCIONES
+=====================================================================
+
+Servidor MCP (Model Context Protocol) para generar charts nativos de
+R2Beat/R2Note desde audio y descripciones en lenguaje natural.
+
+Antes de usarlo, escribe:  pip install -r requirements.txt    (o usa el .venv ya creado)
+
+
+=====================================================================
+1) QUE ES Y COMO FUNCIONA
+=====================================================================
+
+- Tu asistente (opencode) habla con este servidor por stdio.
+- El servidor mantiene "workspaces" de chart en memoria, identificados
+  por un chart_id (el que tu quieras, p.ej. "mi1").
+- Generas el chart paso a paso: crear, añadir notas/patrones, validar,
+  y por ultimo guardarlo en un .xml compatible con R2Beat.
+
+Formato de salida (identico a los charts reales del juego):
+
+  <?xml version="1.0" encoding="gb18030"?>
+  <TITLE Name="NombreCancion">
+  <BPM Frame="0" BPM="175"></BPM>
+  <BGM Name="carpeta/cancion.mp3" Volume="1.00"></BGM>
+  <DELAY Value="0"></DELAY>
+  <LENGTH Value="9000"></LENGTH>
+  <AREA Coord="48" Kind="18" Level="2" FxSndIndex="0"></AREA>
+  ...
+  </TITLE>
+
+Rejilla de tiempo (importante):
+  - 1 pulso (beat) = 12 coords
+  - R2Beat va a 60 fps
+  - coords por segundo = BPM / 5
+  - Frame desde Coord a un BPM:  F = Coord * 300 / BPM
+  - Coord desde Frame:            C = Frame * BPM / 300
+  - DELAY es un ajuste en frames que se afina jugando (offset de la primera nota).
+
+Divisiones de nota aceptadas (notes por pulso -> paso en coords):
+  division 1 = 12 coords (negra)         division 6 = 2 coords
+  division 2 = 6 coords  (corchea)       division 8 = 1.5 coords
+  division 3 = 4 coords  (tresillo)      division 12 = 1 coord (denso)
+  division 4 = 3 coords  (semicorchea)
+
+  Tambien puedes pasar un paso libre en coords como division (p.ej. 5).
+
+Tipos de nota y Kind/Level (no los memorices, la tool los aplica sola):
+
+  singles:
+    up=16/L3  down=17/L3  left=18/L2  right=19/L2
+    up_left=20/L5  up_right=21/L5  down_left=22/L4  down_right=23/L4
+    ramp=24/L4 (salto)  star_left=26/L1  star_right=27/L1
+  holds (largas):
+    up_left=128/129/130  up_right=131/132/133
+    up=134/135/136  down=137/138/139  left=140/141/142  right=143/144/145
+  Las holds duran minimo 12 coords (1 pulso) y se construyen solas
+  (inicio, notas intermedias cada 12 coords, fin).
+
+
+=====================================================================
+2) LAS 15 FUNCIONES (TOOLS)
+=====================================================================
+
+---------------------------------------------------------------------
+create_chart(chart_id, name, bpm=192.0, bgm="", volume=1.0,
+             delay=0, length=0, encoding="gb18030")
+---------------------------------------------------------------------
+Crea un workspace de chart vacio.
+  chart_id  : identificador del workspace (p.ej. "cancion1")
+  name      : titulo de la cancion
+  bpm       : tempo inicial en pulsos/min
+  bgm       : ruta RELATIVA del mp3 dentro de rnr_music, p.ej. "R.I.P/mr.mp3"
+  volume    : volumen del BGM (0.00..1.00)
+  delay     : offset inicial de la cancion, en frames (60fps)
+  length    : duracion total en frames (0 = se auto-completa al guardar)
+  encoding  : codificacion del archivo (gb18030 o euc-kr)
+
+---------------------------------------------------------------------
+load_chart(chart_id, path)
+---------------------------------------------------------------------
+Carga un .xml de R2Beat existente al workspace para editarlo.
+  path : ruta absoluta o relativa del archivo .xml
+
+---------------------------------------------------------------------
+get_chart(chart_id)
+---------------------------------------------------------------------
+Devuelve todo el contenido del chart (titulo, tempos, todas las notas).
+
+---------------------------------------------------------------------
+set_metadata(chart_id, name=None, bgm=None, volume=None,
+             delay=None, length=None)
+---------------------------------------------------------------------
+Modifica los datos del chart sin tocar las notas.
+
+---------------------------------------------------------------------
+set_tempo(chart_id, frame, bpm, original_bpm=None)
+---------------------------------------------------------------------
+Añade o cambia un cambio de tempo.
+  frame : posicion en frames donde empieza el tempo
+          (usa frame=0 para el tempo base)
+  bpm   : nuevo tempo
+  Se pueden poner varios cambios de tempo en la misma cancion.
+
+---------------------------------------------------------------------
+add_pattern(chart_id, start_coord, end_coord, division=4,
+            note_types=None, strategy="alternate", seed=None)
+---------------------------------------------------------------------
+Coloca una sucesion de notas desde start_coord hasta end_coord.
+  division    : 1..12 (notes por pulso) o un paso libre en coords
+  note_types  : lista de tipos, p.ej. ["left","down","up","right"],
+                ["up_left","up_right","down_left","down_right"],
+                ["star_left","star_right"], ["ramp"], etc.
+  strategy    : como se combinan los tipos
+      alternate -> repite la lista en orden (patron ciclico)
+      sequence  -> recorre la lista sin repetir el ultimo
+      random    -> elige al azar sin repetir el mismo seguido
+      walk      -> se mueve entre tipos adyacentes (efecto "paso")
+  seed        : numero para que el random sea reproducible
+
+---------------------------------------------------------------------
+add_hold(chart_id, direction, start_coord, end_coord)
+---------------------------------------------------------------------
+Añade una nota larga.
+  direction   : up, down, left, right, up_left, up_right
+  La longitud se redondea a multiplos de 12 coords si falta
+  (minimo 1 pulso = 12 coords).
+
+---------------------------------------------------------------------
+add_note(chart_id, note_type, coord)
+---------------------------------------------------------------------
+Añade una nota simple en una coordenada exacta. Permite coord decimales
+p.ej. 0.5 o 5073.5.
+
+---------------------------------------------------------------------
+analyze_audio(path)
+---------------------------------------------------------------------
+Analiza un mp3/wav: duracion, BPM detectado, numero de onsets,
+primer onset, silencio inicial (sugerencia de DELAY en frames).
+  Devuelve algo como:
+  {"duration_sec":252.0, "bpm":87.59, "num_onsets":150,
+   "first_onset_sec":1.23, "leading_silence_frames":84}
+
+  OJO: librosa a veces da la MITAD del BPM (ej. 87 en vez de 175).
+  Si el valor no cuadra, pide al asistente que lo duplique.
+
+---------------------------------------------------------------------
+onsets_to_notes(chart_id, audio_path, note_type="down", division=4,
+                max_notes=500, offset_coord=0.0)
+---------------------------------------------------------------------
+Detecta los golpes del audio y coloca notas automaticamente sobre la
+rejilla (usa el tempo base del chart).
+  division      : rejilla a la que se ajustan (p.ej. 4 = semicorcheas)
+  note_type     : tipo de nota que se coloca en todos los onsets
+  max_notes     : limite de notas
+  offset_coord  : desplazamiento para alinear con el primer pulso
+
+---------------------------------------------------------------------
+remove_notes(chart_id, start_coord=None, end_coord=None)
+---------------------------------------------------------------------
+Borra notas. Solo segmento (rango inclusive) o todo si no pasas nada.
+
+---------------------------------------------------------------------
+snap_chart(chart_id, division=4)
+---------------------------------------------------------------------
+Ajusta TODAS las notas a la rejilla de "division" notas por pulso
+(sirve para limpiar decimals sueltos).
+
+---------------------------------------------------------------------
+validate_chart(chart_id)
+---------------------------------------------------------------------
+Comprueba la estructura: BPM bien ordenado, coords validos, duplicados,
+niveles correctos y holds bien cerradas.
+Devuelve: {"ok":true/false, "errors":[...], "warnings":[...], "stats":{...}}
+  stats incluye num_notes, num_holds, first_coord, last_coord, bpm_points.
+
+---------------------------------------------------------------------
+save_chart(chart_id, path)
+---------------------------------------------------------------------
+Guarda el .xml en disco (corrige automaticamente LENGTH y los niveles
+de las notas). Devuelve la validacion final.
+  path : por ejemplo  C:\Users\...\r2noter\R2Test\rnr_music\MiSong\MiSong.xml
+
+---------------------------------------------------------------------
+write_music_entry(chart_id, music_txt_path, index=None,
+                  image=None, file=None, level=17, genre="Electronica",
+                  artist="", coin="0")
+---------------------------------------------------------------------
+Apare/agrega (append) la cancion en el rnr_script/music.txt para que
+el juego la liste.
+  music_txt_path : ruta del music.txt, p.ej.
+                   C:\Users\...\r2noter\R2Test\rnr_script\music.txt
+  index    : numero del tema (si lo dejas en None se auto-asigna el max+1)
+  image    : portada p.ej. "MiSong/MiSong.bmp" (se auto-deriva del bgm)
+  file     : ruta del .xml p.ej. "MiSong/MiSong.xml" (auto-derivada del bgm)
+  level    : dificultad mostrada (1-20)
+  genre    : genero (Electronica, Classic, etc.)
+  artist   : artista
+  coin     : precio (0 = gratis)
+
+
+=====================================================================
+3) FLUJO DE TRABAJO TIPICO
+=====================================================================
+
+Ejemplo en lenguaje natural para el asistente:
+
+  1) create_chart chart_id="m1" name="Mi Cancion" bpm=175
+     bgm="MiCancion/mi.mp3"
+
+  2) analyze_audio de "C:\\...\\MiCancion\\mi.mp3" -> para conocer
+     duracion, onsets y silencio inicial; ajustar set_metadata(delay=...)
+
+  3) add_pattern desde coord 0 hasta coord 384 (16 compases a 175bpm)
+     con division=2, note_types=["left","down","up","right"],
+     strategy="alternate"
+
+  4) add_hold direction="up" desde 384 a 432, add_hold "right" 432 a 480
+
+  5) add_note "ramp" en algunos coords sueltos, o add_pattern
+     note_types=["star_left","star_right"] para la melodia
+
+  6) validate_chart -> si da errores, el asistente los corrige
+     (borra duplicados con remove_notes, ajusta con snap_chart)
+
+  7) save_chart a "C:\\Users\\...\\r2noter\\R2Test\\rnr_music\\MiCancion\\MiCancion.xml"
+
+  8) write_music_entry a "...\\r2noter\\R2Test\\rnr_script\\music.txt"
+     (y asi el juego detecta la cancion)
+
+Para probarlo en el editor: abre el .xml con R2NoteEditor o empaqueta
+con R2MusicPacker (y usa osu_a_r2beat.exe);
+
+
+=====================================================================
+4) EJECUTAR EL SERVIDOR MANUALMENTE (opcional)
+=====================================================================
+
+Ya esta registrado en opencode (config global ~/.config/opencode),
+pero si quieres probarlo a mano:
+
+  C:\Users\Hysteria\OneDrive\Desktop\mcp r2beat\.venv\Scripts\python.exe server.py
+
+Se queda esperando mensajes MCP por stdio (no debe usarse como script normal).
+Para comprobar que responde, se puede lanzar el test:
+  .venv\Scripts\python.exe tests\test_mcp.py     -> lista las 15 tools
+  .venv\Scripts\python.exe tests\test_e2e.py     -> flujo completo (crea, patron, hold, guarda, recarga)
+
+Importante: si cambias la config o el codigo, REINICIA opencode para que
+detecte el servidor MCP (la config no se recarga en caliente).
+
+=====================================================================
+RUTAS DE REFERENCIA (tus herramientas R2Beat)
+=====================================================================
+
+- r2noter\R2NoteEditor-1.6.215-E   -> editor de charts
+- r2noter\Autopack R2MusicPacker 2023 -> empaquetador de canciones
+- r2noter\R2Test\rnr_music         -> carpeta de salida (charts + mp3)
+- r2noter\R2Test\rnr_script\music.txt -> lista de canciones del juego
+- Referencia de formato: repo clonado en
+  C:\Users\Hysteria\AppData\Local\Temp\opencode\dzsfo-r2beat
+=====================================================================
