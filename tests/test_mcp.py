@@ -1,15 +1,28 @@
 import asyncio
-import json
+import os
+import sys
+from pathlib import Path
 
-from mcp import ClientSession, StdioServerParameters
-from mcp.client.stdio import stdio_client
+ROOT_DIR = Path(__file__).resolve().parent.parent
+
+try:
+    from mcp import ClientSession, StdioServerParameters
+    from mcp.client.stdio import stdio_client
+    HAS_MCP_CLIENT = True
+except ImportError:
+    HAS_MCP_CLIENT = False
 
 
 async def main():
+    if not HAS_MCP_CLIENT:
+        print("SKIP: 'mcp' client package not installed in current environment.")
+        print("To run MCP client test: pip install mcp")
+        return
+
     params = StdioServerParameters(
-        command=str(r"C:\Users\Hysteria\OneDrive\Desktop\mcp r2beat\.venv\Scripts\python.exe"),
+        command=sys.executable,
         args=["server.py"],
-        cwd=r"C:\Users\Hysteria\OneDrive\Desktop\mcp r2beat",
+        cwd=str(ROOT_DIR),
     )
     async with stdio_client(params) as (read, write):
         async with ClientSession(read, write) as session:
@@ -26,4 +39,5 @@ async def main():
             print("create_chart ->", data[:80], "...")
 
 
-asyncio.run(main())
+if __name__ == "__main__":
+    asyncio.run(main())

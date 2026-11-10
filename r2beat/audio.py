@@ -1,27 +1,33 @@
 """Audio analysis with librosa: BPM, onsets, and mapping to R2Beat coords."""
 
-import numpy as np
+from __future__ import annotations
+
+import os
+from typing import Any
 
 try:
+    import numpy as np
     import librosa
     HAS_LIBROSA = True
 except Exception:  # pragma: no cover
     HAS_LIBROSA = False
 
 
-def _check():
+def _check() -> None:
     if not HAS_LIBROSA:
         raise RuntimeError(
-            "librosa is not installed. Run: pip install librosa soundfile"
+            "librosa / numpy is not installed. Run: pip install librosa soundfile numpy"
         )
 
 
-def load(path, sr=44100, mono=True):
+def load(path: str, sr: int = 44100, mono: bool = True) -> Any:
     _check()
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"Audio file not found: {path}")
     return librosa.load(path, sr=sr, mono=mono)
 
 
-def detect_bpm(path, start_bpm=70, end_bpm=220):
+def detect_bpm(path: str, start_bpm: float = 70.0, end_bpm: float = 220.0) -> float:
     y, sr = load(path)
     tempo, _ = librosa.beat.beat_track(
         y=y, sr=sr, start_bpm=start_bpm, units="frames"
@@ -29,7 +35,12 @@ def detect_bpm(path, start_bpm=70, end_bpm=220):
     return float(np.atleast_1d(tempo)[0])
 
 
-def detect_onsets(path, top_n=None, sr=44100, min_strength=0.1):
+def detect_onsets(
+    path: str,
+    top_n: int | None = None,
+    sr: int = 44100,
+    min_strength: float = 0.1,
+) -> list[float]:
     y, sr = load(path, sr=sr)
     onset_env = librosa.onset.onset_strength(y=y, sr=sr)
     times = librosa.times_like(onset_env, sr=sr)
@@ -51,13 +62,12 @@ def detect_onsets(path, top_n=None, sr=44100, min_strength=0.1):
     return onsets
 
 
-def onsets_to_coords(onsets, bpm):
+def onsets_to_coords(onsets: list[float], bpm: float) -> list[float]:
     from .timing import coord_from_seconds
-
     return [coord_from_seconds(t, bpm) for t in onsets]
 
 
-def detect_leading_silence_frames(path, sr=44100):
+def detect_leading_silence_frames(path: str, sr: int = 44100) -> int:
     y, sr = load(path, sr=sr)
     if len(y) == 0:
         return 0
@@ -69,7 +79,7 @@ def detect_leading_silence_frames(path, sr=44100):
     return 0
 
 
-def summary(path):
+def summary(path: str) -> dict[str, Any]:
     _check()
     y, sr = load(path)
     duration = len(y) / sr

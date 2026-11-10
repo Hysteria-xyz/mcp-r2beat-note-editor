@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mcp-r2beat"
+version = "0.2.0"
+description = "MCP server and toolkit for generating native R2Beat / R2Note charts from audio and natural language"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+authors = [
+    {name = "Hysteria & Contributors"}
+]
+keywords = ["r2beat", "r2note", "mcp", "rhythm-game", "chart-editor", "audio-analysis"]
+dependencies = [
+    "mcp>=1.2.0",
+    "numpy>=1.24.0",
+]
+
+[project.optional-dependencies]
+audio = [
+    "librosa>=0.10.0",
+    "soundfile>=0.12.0",
+]
+dev = [
+    "pytest>=7.0.0",
+]
+
+[project.scripts]
+r2beat-cli = "cli:main"
+r2beat-server = "server:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["r2beat*"]
