@@ -8,7 +8,24 @@ from typing import Any
 try:
     from mcp.server.fastmcp import FastMCP as _Server
 except ImportError:
-    from mcp.server.mcpserver import MCPServer as _Server
+    try:
+        from mcp.server.mcpserver import MCPServer as _Server
+    except ImportError:
+        class _Server:  # type: ignore
+            """Lightweight fallback server when mcp package is not installed."""
+            def __init__(self, name: str = "r2beat"):
+                self.name = name
+
+            def tool(self):
+                def decorator(fn):
+                    return fn
+                return decorator
+
+            def run(self, *args, **kwargs):
+                raise RuntimeError(
+                    "The 'mcp' package is required to run the MCP server over stdio. "
+                    "Please run: pip install mcp"
+                )
 
 from r2beat.chart import (
     Chart,
@@ -33,7 +50,10 @@ CHARTS: dict[str, Chart] = {}
 
 def _get(chart_id: str) -> Chart:
     if chart_id not in CHARTS:
-        raise ValueError(f"Unknown chart_id '{chart_id}'. Call create_chart first.")
+        raise ValueError(
+            f"Unknown chart_id '{chart_id}'. Existing charts: {list(CHARTS.keys())}. "
+            "Call create_chart or load_chart first."
+        )
     return CHARTS[chart_id]
 
 
@@ -54,7 +74,7 @@ def create_chart(
     length: int = 0,
     encoding: str = "gb18030",
 ) -> dict[str, Any]:
-    """Create a new chart workspace. grid: 12 coords = 1 beat, 60fps."""
+    """Create a new chart workspace. Grid: 12 coords = 1 beat, 60fps."""
     chart = Chart(
         name=name,
         bgm=bgm,
@@ -71,9 +91,11 @@ def create_chart(
 @mcp.tool()
 def load_chart(chart_id: str, path: str) -> dict[str, Any]:
     """Load an existing R2Beat XML chart file into the workspace."""
-    with open(path, "r", encoding="gb18030", errors="replace") as f:
-        text = f.read()
-    chart = parse_xml(text)
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"Chart file not found: {path}")
+    with open(path, "rb") as f:
+        data = f.read()
+    chart = parse_xml(data)
     CHARTS[chart_id] = chart
     return _result(chart)
 
@@ -82,6 +104,41 @@ def load_chart(chart_id: str, path: str) -> dict[str, Any]:
 def get_chart(chart_id: str) -> dict[str, Any]:
     """Return the full chart contents (notes, tempos, metadata)."""
     return _result(_get(chart_id))
+
+
+@mcp.tool()
+def list_charts() -> list[dict[str, Any]]:
+    """List all active chart workspaces in memory with basic statistics."""
+    items: list[dict[str, Any]] = []
+    for cid, c in CHARTS.items():
+        base_bpm = c.tempos[0].bpm if c.tempos else 0.0
+        items.append({
+            "chart_id": cid,
+            "name": c.name,
+            "bpm": base_bpm,
+            "notes_count": len(c.notes),
+            "bgm": c.bgm,
+            "delay": c.delay,
+        })
+    return items
+
+
+@mcp.tool()
+def delete_chart(chart_id: str) -> dict[str, Any]:
+    """Delete a chart workspace from memory."""
+    if chart_id in CHARTS:
+        del CHARTS[chart_id]
+        return {"status": "deleted", "chart_id": chart_id}
+    return {"status": "not_found", "chart_id": chart_id}
+
+
+@mcp.tool()
+def duplicate_chart(source_chart_id: str, new_chart_id: str) -> dict[str, Any]:
+    """Duplicate an existing chart into a new workspace (useful for Easy/Hard difficulty variations)."""
+    src = _get(source_chart_id)
+    cloned = src.clone()
+    CHARTS[new_chart_id] = cloned
+    return _result(cloned, cloned_from=source_chart_id, new_chart_id=new_chart_id)
 
 
 @mcp.tool()
@@ -133,7 +190,7 @@ def add_pattern(
     division = notes per beat (1..12) or a raw coord step.
     note_types = ["up","down","left","right","up_left","up_right","down_left",
     "down_right","ramp","star_left","star_right"].
-    strategy = alternate | sequence | random | walk.
+    strategy = alternate | sequence | pingpong | random | walk.
     """
     if note_types is None:
         note_types = ["left", "down", "up", "right"]
@@ -166,6 +223,43 @@ def add_note(chart_id: str, note_type: str, coord: float) -> dict[str, Any]:
     c.notes.append(Note(coord=float(coord), kind=kind, level=lvl))
     c.sorted()
     return _result(c)
+
+
+@mcp.tool()
+def shift_notes(
+    chart_id: str,
+    delta_coord: float,
+    start_coord: float | None = None,
+    end_coord: float | None = None,
+) -> dict[str, Any]:
+    """Shift notes forward or backward in the given coordinate range."""
+    c = _get(chart_id)
+    shifted = c.shift_notes(float(delta_coord), start_coord, end_coord)
+    return _result(c, shifted_count=shifted)
+
+
+@mcp.tool()
+def mirror_chart(
+    chart_id: str,
+    start_coord: float | None = None,
+    end_coord: float | None = None,
+) -> dict[str, Any]:
+    """Mirror notes horizontally (left <-> right, up_left <-> up_right, down_left <-> down_right)."""
+    c = _get(chart_id)
+    mirrored = c.mirror_notes(start_coord, end_coord)
+    return _result(c, mirrored_count=mirrored)
+
+
+@mcp.tool()
+def scale_chart(
+    chart_id: str,
+    factor: float,
+    origin_coord: float = 0.0,
+) -> dict[str, Any]:
+    """Scale chart note coordinates by factor (e.g. 2.0 = half speed, 0.5 = double speed)."""
+    c = _get(chart_id)
+    scaled = c.scale_coords(float(factor), float(origin_coord))
+    return _result(c, scaled_count=scaled)
 
 
 @mcp.tool()
@@ -243,12 +337,37 @@ def validate_chart(chart_id: str) -> dict[str, Any]:
 
 
 @mcp.tool()
+def auto_fix_chart(chart_id: str) -> dict[str, Any]:
+    """Automatically fix common issues: sort notes, normalize levels, remove duplicate coords, and update length."""
+    c = _get(chart_id)
+    fix_res = validator.auto_fix_all(c)
+    val_res = validator.validate(c)
+    return {**fix_res, "validation": val_res}
+
+
+@mcp.tool()
+def get_chart_summary(chart_id: str) -> dict[str, Any]:
+    """Get rich chart metrics including estimated difficulty star level, NPS, and obstacle counts."""
+    c = _get(chart_id)
+    val = validator.validate(c)
+    return {
+        "chart_id": chart_id,
+        "name": c.name,
+        "stats": val["stats"],
+        "is_valid": val["ok"],
+    }
+
+
+@mcp.tool()
 def save_chart(chart_id: str, path: str) -> dict[str, Any]:
     """Save chart to an .xml file using the R2Beat TITLE format (mb encoding)."""
     c = _get(chart_id)
     validator.auto_fix_length(c)
     validator.auto_fix_levels(c)
     data = chart_to_bytes(c)
+    dir_name = os.path.dirname(os.path.abspath(path))
+    if dir_name:
+        os.makedirs(dir_name, exist_ok=True)
     with open(path, "wb") as f:
         f.write(data)
     return {"saved_to": path, "bytes": len(data), **validator.validate(c)}
@@ -266,11 +385,7 @@ def write_music_entry(
     artist: str = "",
     coin: str = "0",
 ) -> dict[str, Any]:
-    """Append a <Music> entry to rnr_script/music.txt.
-
-    image/file default to the folder implied by the bgm path, e.g.
-    bgm 'chaoz airflow/chaoz airflow.mp3' -> Image 'chaoz airflow/chaoz airflow.bmp',
-    File 'chaoz airflow/chaoz airflow.xml'."""
+    """Append a <Music> entry to rnr_script/music.txt."""
     c = _get(chart_id)
     folder = os.path.dirname(c.bgm.replace("\\", "/")).replace("\\", "/")
     file = file or (f"{folder}/{c.name}.xml" if folder else f"{c.name}/{c.name}.xml")
@@ -295,5 +410,9 @@ def write_music_entry(
     }
 
 
-if __name__ == "__main__":
+def main():
     mcp.run(transport="stdio")
+
+
+if __name__ == "__main__":
+    main()
